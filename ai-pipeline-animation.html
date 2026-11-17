@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How an AI Model Is Made – Data to Inference</title>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600&family=Nunito:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;background:#17402E;font-family:Nunito,Inter,'DejaVu Sans',sans-serif}
+  #wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px}
+  canvas{width:min(100%, calc((100vh - 90px) * 16 / 9));height:auto;border-radius:14px;background:#FBF6EA}
+  #bar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  button{font:800 15px Nunito,Inter,sans-serif;border:none;border-radius:10px;padding:9px 14px;cursor:pointer;background:#EAF3EA;color:#17402E}
+  button.main{background:#F4C542;color:#2A2410}
+  body.rec #bar{display:none} body.rec #wrap{padding:0} body.rec canvas{width:1920px;border-radius:0}
+</style>
+</head>
+<body>
+<div id="wrap">
+<canvas id="c" width="1920" height="1080" aria-label="Animation: how an AI model goes from data to cleaning, training, testing and use"></canvas>
+<div id="bar">
+<button class="main" id="play">⏸ Pause</button>
+<button id="restart">⟲ Restart</button>
+<button data-t="4">1 Collect</button>
+<button data-t="13">2 Clean</button>
+<button data-t="24">3 Train</button>
+<button data-t="37">4 Test</button>
+<button data-t="46">5 Inference</button>
+<button data-t="56">Summary</button>
+</div>
+</div>
+<script>
+const c = document.getElementById('c'), g = c.getContext('2d');
+const F = "'Fredoka','Nunito',Inter,'DejaVu Sans',sans-serif";
+const B = "'Nunito',Inter,'DejaVu Sans',sans-serif";
+const COL = {dark:'#17402E', ink:'#3E4F45', cream:'#FBF6EA', mint:'#EAF3EA', card:'#FFFDF7', line:'#E3D8BE',
+  train:'#1F7A50', test:'#2D5FA8', oops:'#B9481A', sun:'#F4C542', soft:'#CFE3D6'};
+const STAGES = [[0,'intro'],[4,'collect'],[13,'clean'],[24,'train'],[37,'test'],[46,'use'],[56,'summary']];
+const END = 63;
+const CAPTION = {
+  intro:'Let’s follow Fruit Robot from raw data to a working AI.',
+  collect:'1. Collect data: build a dataset of examples. Each example has a label (the correct answer).',
+  clean:'2. Clean data: remove blurry, duplicate and irrelevant examples, and fix wrong labels.',
+  train:'3. Train: the model predicts, compares with the label, and updates its parameters. Accuracy rises each epoch.',
+  test:'4. Test: measure accuracy on test data the model has never seen. Did it generalise?',
+  use:'5. Inference: the trained model makes predictions on new, real-world data.',
+  summary:'Found new errors? Collect more data and retrain. That’s how AI models keep improving.'
+};
+const CHIPS = ['1 · Collect data','2 · Clean data','3 · Train','4 · Test','5 · Inference (use)'];
+
+const cl = x => x<0?0:x>1?1:x;
+const eo = p => 1-Math.pow(1-cl(p),3);
+const eio = p => {p=cl(p);return p<.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2};
+const lerp = (a,b,p) => a+(b-a)*p;
+
+function rr(x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();}
+function text(s,x,y,size,color,weight,align,font){g.font=`${weight||800} ${size}px ${font||B}`;g.fillStyle=color;g.textAlign=align||'center';g.textBaseline='middle';g.fillText(s,x,y);}
+function pill(s,x,y,bg,fg,size){size=size||26;g.font=`800 ${size}px ${B}`;const w=g.measureText(s).width+size*1.2,h=size*1.7;rr(x-w/2,y-h/2,w,h,h/2);g.fillStyle=bg;g.fill();text(s,x,y+1,size,fg,800);}
+function wrapText(s,x,y,maxW,lh,size,color,weight,font){g.font=`${weight||800} ${size}px ${font||B}`;const words=s.split(' ');let line='',lines=[];for(const w of words){const t=line?line+' '+w:w;if(g.measureText(t).width>maxW&&line){lines.push(line);line=w}else line=t}lines.push(line);const y0=y-(lines.length-1)*lh/2;lines.forEach((l,i)=>text(l,x,y0+i*lh,size,color,weight,'center',font));}
+function check(x,y,s,color){g.save();g.strokeStyle=color;g.lineWidth=s*0.22;g.lineCap='round';g.lineJoin='round';g.beginPath();g.moveTo(x-s*.45,y);g.lineTo(x-s*.12,y+s*.32);g.lineTo(x+s*.5,y-s*.35);g.stroke();g.restore();}
+function cross(x,y,s,color){g.save();g.strokeStyle=color;g.lineWidth=s*0.2;g.lineCap='round';g.beginPath();g.moveTo(x-s/2,y-s/2);g.lineTo(x+s/2,y+s/2);g.moveTo(x+s/2,y-s/2);g.lineTo(x-s/2,y+s/2);g.stroke();g.restore();}
+
+// ---------- fruit ----------
+function apple(x,y,r,col){
+  g.save();g.fillStyle=col;g.beginPath();g.arc(x-r*.32,y,r*.78,0,7);g.arc(x+r*.32,y,r*.78,0,7);g.fill();
+  g.beginPath();g.arc(x,y+r*.12,r*.8,0,7);g.fill();
+  g.fillStyle='rgba(255,255,255,.35)';g.beginPath();g.ellipse(x-r*.4,y-r*.25,r*.16,r*.26,-.4,0,7);g.fill();
+  g.strokeStyle='#6B3E1F';g.lineWidth=r*.12;g.lineCap='round';g.beginPath();g.moveTo(x,y-r*.62);g.lineTo(x+r*.08,y-r*1.0);g.stroke();
+  g.fillStyle='#4CAF6E';g.beginPath();g.ellipse(x+r*.34,y-r*.92,r*.32,r*.14,-.5,0,7);g.fill();g.restore();
+}
+function banana(x,y,s){
+  g.save();g.translate(x,y);g.rotate(-.35);g.scale(s,s);
+  g.fillStyle='#F2C230';g.strokeStyle='#C99A10';g.lineWidth=3;
+  g.beginPath();g.moveTo(-52,-14);g.quadraticCurveTo(0,58,54,-20);g.lineTo(46,-28);g.quadraticCurveTo(0,26,-44,-22);g.closePath();g.fill();g.stroke();
+  g.fillStyle='#6B4E00';g.beginPath();g.arc(-50,-18,5,0,7);g.fill();g.beginPath();g.arc(52,-25,5,0,7);g.fill();
+  g.restore();
+}
+function ball(x,y,r){g.save();g.fillStyle='#2D5FA8';g.beginPath();g.arc(x,y,r*.85,0,7);g.fill();g.strokeStyle='#FBF6EA';g.lineWidth=r*.12;g.beginPath();g.arc(x-r*.9,y,r*.9,-.9,.9);g.stroke();g.beginPath();g.arc(x+r*.9,y,r*.9,Math.PI-.9,Math.PI+.9);g.stroke();g.restore();}
+function fruit(type,x,y,size){ // size ~ radius
+  if(type==='apple')apple(x,y,size,'#D9473B');
+  else if(type==='gapple')apple(x,y,size,'#7CB342');
+  else if(type==='yapple')apple(x,y,size,'#E8B931');
+  else if(type==='banana')banana(x,y,size/44);
+  else if(type==='ball')ball(x,y,size);
+}
+const CW=150, CH=180;
+function card(item,cx,cy,o){
+  o=o||{};const a=o.alpha==null?1:o.alpha;if(a<=0)return;
+  g.save();g.globalAlpha=a;g.translate(cx,cy);if(o.rot)g.rotate(o.rot);if(o.scale!=null)g.scale(o.scale,o.scale);
+  rr(-CW/2,-CH/2,CW,CH,20);g.fillStyle=COL.card;g.fill();g.lineWidth=o.ring?7:3;g.strokeStyle=o.ring||COL.line;g.stroke();
+  if(item.blur)g.filter='blur(6px)';
+  fruit(item.type,0,-22,40);
+  g.filter='none';
+  const lab=o.label!=null?o.label:item.label;
+  text(lab,0,58,26,o.labelColor||COL.dark,800);
+  g.restore();
+}
+
+// ---------- robot ----------
+function robot(x,y,s,blink){
+  g.save();g.translate(x-260*s,y-300*s);g.scale(s,s);
+  g.fillStyle='rgba(23,64,46,.14)';g.beginPath();g.ellipse(260,560,170,16,0,0,7);g.fill();
+  g.fillStyle=COL.sun;g.beginPath();g.arc(260,38,20,0,7);g.fill();
+  g.fillStyle=COL.soft;rr(251,52,18,52,6);g.fill();rr(104,166,30,70,12);g.fill();rr(386,166,30,70,12);g.fill();
+  g.fillStyle='#DDEBE1';rr(130,100,260,196,52);g.fill();
+  g.fillStyle=COL.dark;rr(166,140,188,110,36);g.fill();
+  g.fillStyle='#7FE0B0';
+  if(blink){rr(200,186,40,8,4);g.fill();rr(280,186,40,8,4);g.fill();}
+  else{g.beginPath();g.arc(220,190,21,0,7);g.fill();g.beginPath();g.arc(300,190,21,0,7);g.fill();}
+  g.strokeStyle='#7FE0B0';g.lineWidth=9;g.lineCap='round';g.beginPath();g.moveTo(228,226);g.quadraticCurveTo(260,250,292,226);g.stroke();
+  g.fillStyle=COL.soft;rr(236,296,48,20,4);g.fill();
+  g.strokeStyle=COL.soft;g.lineWidth=30;g.beginPath();g.moveTo(176,350);g.quadraticCurveTo(110,380,92,430);g.stroke();g.beginPath();g.moveTo(344,350);g.quadraticCurveTo(410,380,428,430);g.stroke();
+  g.fillStyle='#DDEBE1';rr(160,312,200,180,44);g.fill();
+  g.fillStyle=COL.sun;rr(200,350,120,76,18);g.fill();
+  g.fillStyle=COL.dark;rr(218,392,16,22,4);g.fill();rr(252,378,16,36,4);g.fill();rr(286,364,16,50,4);g.fill();
+  g.fillStyle=COL.soft;rr(196,488,40,62,14);g.fill();rr(284,488,40,62,14);g.fill();
+  g.restore();
+}
+function bubble(x,y,s,bg,fg,size){
+  size=size||36;g.font=`800 ${size}px ${B}`;const w=g.measureText(s).width+size*1.3,h=size*1.9;
+  g.fillStyle=bg;rr(x-w/2,y-h/2,w,h,22);g.fill();g.beginPath();g.moveTo(x-16,y+h/2-2);g.lineTo(x,y+h/2+22);g.lineTo(x+16,y+h/2-2);g.fill();
+  text(s,x,y+1,size,fg,800);
+}
+
+// ---------- data ----------
+const ITEMS = [
+ ['apple','Apple'],['banana','Banana'],['apple','Apple'],['banana','Banana'],['gapple','Apple'],['banana','Banana'],['apple','Apple'],['banana','Apple'],
+ ['banana','Banana'],['banana','Banana'],['apple','Apple',1],['gapple','Apple'],['banana','Banana'],['ball','Apple'],['apple','Apple'],['banana','Banana'],
+ ['apple','Apple'],['banana','Banana'],['apple','Apple'],['banana','Banana',1],['apple','Apple'],['banana','Banana'],['apple','Banana'],['gapple','Apple']
+].map(a=>({type:a[0],label:a[1],blur:!!a[2]}));
+const GX0 = (1920-(8*CW+7*26))/2 + CW/2, GY = [345,551,757];
+const pos = i => [GX0 + (i%8)*(CW+26), GY[Math.floor(i/8)]];
+const PROBLEMS = [
+ {i:10,tag:'Blurry photo',act:'remove'},{i:19,tag:'Blurry photo',act:'remove'},{i:9,tag:'Duplicate copy',act:'remove'},
+ {i:13,tag:'Not a fruit!',act:'remove'},{i:7,tag:'Wrong label',act:'fix',to:'Banana'},{i:22,tag:'Wrong label',act:'fix',to:'Apple'}
+];
+
+// ---------- scenes ----------
+function sIntro(lt){
+  const a=eo(lt/0.8);g.globalAlpha=a;
+  text('How does an AI model learn?',960,330,80,COL.dark,600,'center',F);
+  robot(960,640+ (1-a)*40,0.55, lt%2.2>2.05);
+  g.globalAlpha=1;
+}
+function sCollect(lt){
+  ITEMS.forEach((it,i)=>{
+    const p=(lt-0.2-i*0.15)/0.6; if(p<=0)return;
+    const [x,y]=pos(i);const e=eo(p);
+    card(it,lerp(2150,x,e),lerp(y-120,y,e),{rot:(1-e)*0.5});
+  });
+  const n=ITEMS.filter((_,i)=>lt-0.2-i*0.15>0.3).length;
+  if(lt>1)pill(`${n} examples collected`,960,215,COL.train,COL.cream,26);
+}
+function cleanState(lt){
+  const st=ITEMS.map(()=>({alpha:1,scale:1,ring:null,label:null,labelColor:null,tag:null,x:0,act:0}));
+  PROBLEMS.forEach((pb,k)=>{
+    const p=lt-(0.6+k*1.55), s=st[pb.i];
+    if(p<0)return;
+    if(p<0.75){s.ring=COL.oops;s.tag=pb.tag;s.tagA=eo(p/0.25);}
+    else if(pb.act==='remove'){const q=cl((p-0.75)/0.5);s.alpha=1-q;s.scale=1-0.4*q;s.x=q;s.tag=q<0.6?pb.tag:null;s.tagA=1-q;s.ring=COL.oops;}
+    else{const q=cl((p-0.75)/0.4);s.label=pb.to;s.labelColor=COL.train;s.ring=COL.train;s.fixed=q;if(p>2.2)s.ring=null;}
+  });
+  return st;
+}
+function sClean(lt){
+  const st=cleanState(lt);
+  ITEMS.forEach((it,i)=>{const s=st[i];const [x,y]=pos(i);
+    card(it,x,y,{alpha:s.alpha,scale:s.scale,ring:s.ring,label:s.label,labelColor:s.labelColor});
+    if(s.x>0&&s.alpha>0){g.globalAlpha=s.alpha;cross(x,y-20,90*s.scale,COL.oops);g.globalAlpha=1;}
+    if(s.fixed&&s.fixed<1.2&&lt<11.5){g.globalAlpha=cl(s.fixed);check(x+50,y-62,34,COL.train);g.globalAlpha=1;}
+  });
+  let tag=null,ta=0;ITEMS.forEach((it,i)=>{const s=st[i];if(s.tag){tag=s.tag;ta=cl(s.tagA);}});
+  if(tag){g.globalAlpha=ta;pill('Problem found: '+tag,960,215,COL.oops,COL.cream,28);g.globalAlpha=1;}
+  else if(lt>10)pill('Clean data ready: 20 good examples',960,215,COL.train,COL.cream,28);
+  else if(lt<0.6)pill('Checking every example…',960,215,COL.dark,COL.cream,28);
+}
+const ROUNDS=[['o','r','o','o'],['r','o','r','o'],['r','r','o','r'],['r','r','r','r'],['r','r','r','r']];
+const SCORES=[4,6,7,9,9];
+const TF=['apple','banana','gapple','banana'];
+function sTrain(lt){
+  // pile
+  for(let k=2;k>=0;k--)card(ITEMS[[0,5,11][k]],300+k*14,600-k*14,{});
+  text('Training data',314,385,30,COL.ink,800);
+  const RL=2.4, r=Math.min(4,Math.max(0,Math.floor((lt-0.5)/RL))), rt=(lt-0.5)-r*RL;
+  const rx=880, ry=600;
+  robot(rx,ry,0.62,false);
+  text(lt<0.5?'Ready to train':`Epoch ${r+1}`,rx,270,48,COL.dark,600,'center',F);
+  let stage='Predict';
+  if(lt>=0.5&&rt<4*0.55+0.1){
+    const k=Math.floor((rt-0.1)/0.55), e=((rt-0.1)-k*0.55)/0.55;
+    if(k>=0&&k<4&&lt<0.5+5*RL){
+      const res=ROUNDS[r][k];
+      if(e<0.45){const p=eio(e/0.45);fruit(TF[k],lerp(440,rx-30,p),lerp(540,500,p)-Math.sin(p*Math.PI)*90,40);stage='Predict';}
+      else{const ok=res==='r';stage=ok?'Compare':'Update';
+        pill(ok?'Correct!':'Error → update parameters',rx+250,ry-170,ok?COL.train:COL.oops,COL.cream,30);}
+    }
+  }
+  // loop label
+  const words=['Predict','Compare','Update'];let x0=rx-230;
+  words.forEach((w,i)=>{const on=w===stage&&lt>0.5&&lt<12.5;
+    pill(w,x0+i*230,880,on?(w==='Update'?COL.oops:COL.dark):'#E6EDE7',on?COL.cream:'#5A6B61',30);
+    if(i<2)text('→',x0+i*230+115,880,36,'#7A8C81',800);});
+  // chart
+  const bx0=1250,base=840,mh=420,bw=80,gap=34;
+  text('Accuracy each epoch (correct out of 10)',bx0+(5*bw+4*gap)/2,330,28,COL.ink,800);
+  g.fillStyle=COL.dark;g.fillRect(bx0-20,base,5*bw+4*gap+40,5);
+  SCORES.forEach((v,i)=>{
+    const done=0.5+(i+1)*RL-0.15, p=eo((lt-done)/0.4), x=bx0+i*(bw+gap);
+    text('E'+(i+1),x+bw/2,base+32,26,'#5A6B61',800);
+    if(p<=0)return;const h=mh*v/10*p;
+    rr(x,base-h,bw,h,14);g.fillStyle=i===0?'#8DBFA4':COL.train;g.fill();g.fillRect(x,base-14,bw,14);
+    text(String(v),x+bw/2,base-h-26,34,COL.dark,800);
+  });
+}
+const TEST=[['apple','Apple'],['banana','Banana'],['gapple','Apple'],['banana','Banana'],['apple','Apple'],['banana','Banana'],['yapple','Banana',1],['banana','Banana'],['gapple','Apple'],['apple','Apple']];
+function sTest(lt){
+  let right=0;
+  TEST.forEach((t,i)=>{
+    const x=260+(i%5)*190, y=i<5?400:690;
+    const p=eo((lt-0.1-i*0.12)/0.4); if(p<=0)return;
+    const rev=lt>1.8+i*0.45, wrong=!!t[2];
+    card({type:t[0],label:'?'},x,y,{scale:0.6+0.4*p,alpha:p,ring:rev?(wrong?COL.oops:COL.train):COL.test,label:rev?t[1]:'?',labelColor:rev?(wrong?COL.oops:COL.train):COL.test});
+    if(rev){pill(wrong?'error':'correct',x,y+125,wrong?COL.oops:COL.train,COL.cream,24);if(!wrong)right++;}
+  });
+  text('Test data: new fruit never seen in training',735,225,30,COL.test,800);
+  robot(1520,470,0.42,lt%2.6>2.45);
+  if(lt>6.1){const p=eo((lt-6.1)/0.5);g.globalAlpha=p;
+    text(`${right}/10`,1520,770,130,COL.train,600,'center',F);text('= 90% test accuracy',1520,860,34,COL.ink,800);g.globalAlpha=1;}
+  else if(lt>1.8)text(`Score: ${right}`,1520,770,60,COL.dark,600,'center',F);
+}
+const USE=['banana','apple','gapple','banana','apple','banana','banana','apple','gapple'];
+function sUse(lt){
+  // belt
+  g.fillStyle='#5A6B61';rr(40,640,800,34,17);g.fill();
+  for(let k=0;k<11;k++){g.fillStyle='#8FA197';g.beginPath();g.arc(70+k*74,657,10,0,7);g.fill();}
+  text('New real-world data arriving',440,720,28,COL.ink,800);
+  robot(990,560,0.55,false);
+  // baskets
+  const BX=[1440,1730];['Apples','Bananas'].forEach((n,k)=>{
+    g.fillStyle=k?'#F6E3A6':'#F3C9C3';g.beginPath();g.ellipse(BX[k],760,135,22,0,0,7);g.fill();
+    g.fillStyle=k?'#E9B81F':'#D9473B';g.beginPath();g.moveTo(BX[k]-135,760);g.quadraticCurveTo(BX[k],930,BX[k]+135,760);g.closePath();g.fill();
+    text(n,BX[k],880,34,COL.cream,800);
+  });
+  const counts=[0,0];let sorted=0,speech=null;
+  USE.forEach((t,i)=>{
+    const s=0.3+i*0.85, u=(lt-s)/2.2; if(u<0)return;
+    const k=t==='banana'?1:0;
+    if(u<0.6){fruit(t,lerp(60,835,u/0.6),612,38);}
+    else if(u<0.85){fruit(t,835,612,38);speech=k?'Banana!':'Apple!';}
+    else if(u<1.2){const p=(u-0.85)/0.35;const sx=980,sy=520,ex=BX[k]+(counts[k]%4-1.5)*52,ey=735-Math.floor(counts[k]/4)*30;
+      fruit(t,lerp(sx,ex,p),lerp(sy,ey,p)-Math.sin(p*Math.PI)*170,34);}
+    else{const ex=BX[k]+(counts[k]%4-1.5)*52,ey=735-Math.floor(counts[k]/4)*30;fruit(t,ex,ey,34);counts[k]++;sorted++;}
+  });
+  if(speech)bubble(990,300,speech,COL.dark,COL.cream,40);
+  text(`Predictions made: ${sorted}`,1585,330,32,COL.train,800);
+}
+function sSummary(lt){
+  const xs=[300,630,960,1290,1620], names=['Data','Clean','Train','Test','Inference'];
+  xs.forEach((x,i)=>{const p=eo((lt-0.2-i*0.3)/0.5);if(p<=0)return;g.globalAlpha=p;
+    g.fillStyle=i===4?COL.sun:COL.train;g.beginPath();g.arc(x,450,95*(0.7+0.3*p),0,7);g.fill();
+    text(String(i+1),x,450,72,i===4?COL.dark:COL.cream,600,'center',F);
+    text(names[i],x,595,42,COL.dark,600,'center',F);
+    if(i<4){g.fillStyle='#9DB8A6';g.beginPath();g.moveTo(x+115,440);g.lineTo(x+195,440);g.lineTo(x+195,422);g.lineTo(x+225,450);g.lineTo(x+195,478);g.lineTo(x+195,460);g.lineTo(x+115,460);g.closePath();g.fill();}
+    g.globalAlpha=1;});
+  const q=eo((lt-2.2)/0.8);if(q>0){g.globalAlpha=q;g.save();g.strokeStyle=COL.oops;g.lineWidth=8;g.setLineDash([22,14]);g.lineCap='round';
+    g.beginPath();g.moveTo(1620,640);g.lineTo(1620,760);g.quadraticCurveTo(1620,790,1590,790);g.lineTo(330,790);g.quadraticCurveTo(300,790,300,760);g.lineTo(300,665);g.stroke();g.restore();
+    g.fillStyle=COL.oops;g.beginPath();g.moveTo(276,672);g.lineTo(300,636);g.lineTo(324,672);g.fill();
+    pill('New errors → more data → retrain',960,790,COL.oops,COL.cream,32);g.globalAlpha=1;}
+}
+const SCENES={intro:sIntro,collect:sCollect,clean:sClean,train:sTrain,test:sTest,use:sUse,summary:sSummary};
+
+function stageAt(t){let k=0;for(let i=0;i<STAGES.length;i++)if(t>=STAGES[i][0])k=i;return k;}
+function render(t){
+  t=Math.max(0,Math.min(END-0.001,t));
+  const k=stageAt(t),name=STAGES[k][1],st=STAGES[k][0],en=k+1<STAGES.length?STAGES[k+1][0]:END,lt=t-st;
+  g.setTransform(1,0,0,1,0,0);g.globalAlpha=1;g.filter='none';
+  g.fillStyle=COL.cream;g.fillRect(0,0,1920,1080);
+  // header
+  text('How an AI model is made',80,58,34,COL.dark,600,'left',F);
+  const cw=318,gp=26,x0=(1920-(5*cw+4*gp))/2;
+  CHIPS.forEach((s,i)=>{const x=x0+i*(cw+gp),idx=k-1;
+    const state=name==='summary'||i<idx?'done':i===idx?'on':'next';
+    rr(x,98,cw,70,35);g.fillStyle=state==='done'?COL.train:state==='on'?COL.sun:'#FFFDF7';g.fill();
+    if(state==='next'){g.lineWidth=3;g.strokeStyle=COL.line;g.stroke();}
+    text(s,x+cw/2,134,28,state==='done'?COL.cream:state==='on'?'#2A2410':'#7A8C81',800);
+    if(i<4){g.fillStyle='#9DB8A6';g.beginPath();g.moveTo(x+cw+6,124);g.lineTo(x+cw+20,134);g.lineTo(x+cw+6,144);g.fill();}
+  });
+  // scene
+  const fade=Math.min(cl(lt/0.4),cl((en-t)/0.3));
+  g.save();g.globalAlpha=fade;SCENES[name](lt);g.restore();g.globalAlpha=1;
+  // caption
+  rr(80,935,1760,110,28);g.fillStyle=COL.dark;g.fill();
+  g.globalAlpha=cl(lt/0.4);wrapText(CAPTION[name],960,990,1680,46,38,COL.cream,800);g.globalAlpha=1;
+}
+window.render=render;window.END=END;
+
+// ---------- player ----------
+const rec=location.search.indexOf('rec')>=0;
+if(rec){document.body.classList.add('rec');render(0);}
+else{
+  let t=0,playing=true,last=performance.now(),hold=0;
+  const btn=document.getElementById('play');
+  function frame(now){const dt=(now-last)/1000;last=now;
+    if(playing){if(t>=END-0.05){hold+=dt;if(hold>2.5){t=0;hold=0;}}else t+=dt;}
+    render(t);requestAnimationFrame(frame);}
+  requestAnimationFrame(frame);
+  btn.onclick=()=>{playing=!playing;btn.textContent=playing?'⏸ Pause':'▶ Play';};
+  document.getElementById('restart').onclick=()=>{t=0;hold=0;playing=true;btn.textContent='⏸ Pause';};
+  document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>{t=+b.dataset.t;hold=0;});
+  document.addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();btn.click();}});
+  if(document.fonts)document.fonts.ready.then(()=>render(t));
+}
+</script>
+</body>
+</html>
